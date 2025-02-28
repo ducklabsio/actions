@@ -121,9 +121,10 @@ runs:
                 artifacts_response=$(curl -s -H "Circle-Token: ${circle_token}" "$artifacts_url")
                 echo "Artifacts for job build number $job_number:"
                 echo "$artifacts_response" | jq -c '.items[]' | while read art; do
-                    art_url=$(echo "$art" | jq -r '.url')
                     art_path=$(echo "$art" | jq -r '.path')
-                    echo "${art_path}:${art_url}" >> ${{ github.workspace }}/artifacts.txt
+                    art_url=$(echo "$art" | jq -r '.url')
+                    json=$(jq --arg k "${art_path}" --arg v "${art_url}" '. + {($k): $v}' <<< "$json")
+                    echo "${json} > ${{ github.workspace }}/artifacts.json
                 done
 
                 # Use CircleCI v1.1 API to get detailed job info (including steps)
