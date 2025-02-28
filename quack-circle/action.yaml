@@ -75,7 +75,8 @@ runs:
             exit 1
             fi
         done
-        workflow_id=$(curl -s "https://circleci.com/api/v2/pipeline/$pipeline_id/workflow?circle-token=CIRCLECI_TOKEN" | jq -r '.items[].id')
+        
+        workflow_id=$(curl -s -H "Circle-Token: ${circle_token}" "${workflows_url}" | jq -r '.items[].id')
         pipeline_url="https://app.circleci.com/pipelines/github/${cci_org}/${repo}/$pipeline_number/workflows/$workflow_id"
         echo "==============================================================================================================="
         echo "CircleCI pipeline URL: $pipeline_url"
