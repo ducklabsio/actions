@@ -124,8 +124,7 @@ runs:
                 echo "$artifacts_response" | jq -c '.items[]' | while read art; do
                     art_path=$(echo "$art" | jq -r '.path')
                     art_url=$(echo "$art" | jq -r '.url')
-                    json=$(jq --arg k "${art_path}" --arg v "${art_url}" '. + {($k): $v}' <<< "$json")
-                    echo "${json}" > ${{ github.workspace }}/artifacts.json
+                    json=$(jq --arg k "${art_path}" --arg v "${art_url}" '. + {$k: $v}' <<< "$json")
                 done
 
                 # Use CircleCI v1.1 API to get detailed job info (including steps)
@@ -163,6 +162,9 @@ runs:
                 echo "---- End of logs for job build number $job_number ----"
             done
         done
+        
+        # Save artifacts to a file for later retrieval
+        echo "${json}" > ${{ github.workspace }}/artifacts.json
 
         # --------------------------------------
         # 6. Set the Workflow Exit Code Based on Job Statuses
