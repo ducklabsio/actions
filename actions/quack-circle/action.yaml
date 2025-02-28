@@ -1,0 +1,161 @@
+name: 'Trigger CircleCI Pipeline'
+description: >
+  Triggers a CircleCI pipeline on the branch that triggered the workflow,
+  waits for it to finish, and then retrieves job logs using CircleCI’s v1.1 API.
+inputs:
+  circleci-org:
+        description: 'CircleCI organization name'
+        required: true
+  circleci-token:
+    description: 'CircleCI API token (store as a secret in GitHub)'
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - name: Trigger, wait, and fetch CircleCI logs
+      shell: bash
+      run: |
+        set -e
+        circle_token="${{ inputs.circleci-token }}"
+        cci_org="${{ inputs.circleci-org }}"
+
+        # --------------------------------------
+        # 1. Determine Branch and Repository Name
+        # --------------------------------------
+        branch="${{ github.ref_name }}"
+        if [ -z "$branch" ]; then
+            echo "No branch detected; defaulting to 'main'."
+            branch="main"
+        fi
+        repo=$(echo "${{ github.repository }}" | cut -d '/' -f2)
+        echo "Using branch '${branch}' in repository ${repo}"
+
+        # --------------------------------------
+        # 2. Trigger CircleCI Pipeline
+        # --------------------------------------
+        trigger_url="https://circleci.com/api/v2/project/gh/${cci_org}/${repo}/pipeline"
+        echo "Triggering pipeline on branch '${branch}'..."
+        payload=$(jq -n --arg branch "$branch" '{branch: $branch}')
+        trigger_response=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Circle-Token: ${circle_token}" \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "$trigger_url")
+        http_body=$(echo "$trigger_response" | sed '$d')
+        http_status=$(echo "$trigger_response" | tail -n1)
+        if [ "$http_status" -ge 400 ]; then
+            echo "Failed to trigger pipeline. HTTP status: $http_status"
+            echo "Response: $http_body"
+            exit 1
+        fi
+        pipeline_id=$(echo "$http_body" | jq -r '.id')
+
+        echo "Pipeline triggered successfully. Pipeline ID: $pipeline_id"
+
+        # ----------------------------------------------
+        # 3. Wait for Workflows to Appear for the Pipeline
+        # ----------------------------------------------
+        workflows_url="https://circleci.com/api/v2/pipeline/${pipeline_id}/workflow"
+        echo "Waiting for workflows to be created for pipeline ${pipeline_id}..."
+        max_wait=30
+        waited=0
+        while true; do
+            workflows_response=$(curl -s -H "Circle-Token: ${circle_token}" "$workflows_url")
+            total_workflows=$(echo "$workflows_response" | jq '.items | length')
+            if [ "$total_workflows" -gt 0 ]; then
+            echo "Found $total_workflows workflow(s)."
+            break
+            fi
+            echo "No workflows found yet; waiting 10 seconds..."
+            sleep 10
+            waited=$((waited + 10))
+            if [ "$waited" -ge "$max_wait" ]; then
+            echo "Timed out waiting for workflows."
+            exit 1
+            fi
+        done
+
+        # --------------------------------------
+        # 4. Poll for Pipeline Workflows to Complete
+        # --------------------------------------
+        echo "Polling workflows for pipeline completion..."
+        while true; do
+            workflows_response=$(curl -s -H "Circle-Token: ${circle_token}" "$workflows_url")
+            total_workflows=$(echo "$workflows_response" | jq '.items | length')
+            finished_workflows=$(echo "$workflows_response" | jq '[.items[] | select(.status=="success" or .status=="failed" or .status=="error" or .status=="canceled")] | length')
+            echo "Workflows: $finished_workflows of $total_workflows finished."
+            if [ "$finished_workflows" -eq "$total_workflows" ]; then
+            break
+            fi
+            sleep 10
+        done
+        echo "All workflows finished."
+
+        # --------------------------------------
+        # 5. For Each Job, Fetch Job Details (v1.1) and Logs
+        # --------------------------------------
+        pipeline_failed=0
+        workflow_ids=$(echo "$workflows_response" | jq -r '.items[].id')
+        for wf in $workflow_ids; do
+            echo "Processing workflow: $wf"
+            wf_url="https://circleci.com/api/v2/workflow/${wf}"
+            wf_response=$(curl -s -H "Circle-Token: ${circle_token}" "$wf_url")
+            wf_status=$(echo "$wf_response" | jq -r '.status')
+            jobs_response=$(curl -s -H "Circle-Token: ${circle_token}" "${wf_url}/job")
+            job_count=$(echo "$jobs_response" | jq '.items | length')
+            echo "Found $job_count job(s) in workflow $wf"
+
+            echo "$jobs_response" | jq -c '.items[]' | while read job; do
+            job_name=$(echo "$job" | jq -r '.name')
+            job_status=$(echo "$job" | jq -r '.status')
+            job_number=$(echo "$job" | jq -r '.job_number')
+            # Use the job_number from the v2 API; this is the build number needed for v1.1.
+            
+            echo "Job: $job_name (Build Number: $job_number) finished with status: $job_status"
+            if [[ "$job_status" == "failed" || "$job_status" == "error" ]]; then
+                pipeline_failed=1
+            fi
+
+            # Use CircleCI v1.1 API to get detailed job info (including steps)
+            job_details_url="https://circleci.com/api/v1.1/project/github/${cci_org}/${repo}/${job_number}?circle-token=${circle_token}"
+            echo "Fetching job details from v1.1 API for build number $job_number..."
+            job_details=$(curl -s "$job_details_url")
+            echo "${job_details}" | jq -r '.' 
+            steps=$(echo "$job_details" | jq '.steps')
+            if [ "$steps" = "null" ]; then
+                echo "No steps found for job build number $job_number."
+            else
+                step_count=$(echo "$steps" | jq 'length')
+                echo "Found ${step_count} step(s) for job build number $job_number."
+                for i in $(seq 0 $((step_count - 1))); do
+                    step=$(echo "$steps" | jq ".[$i]")
+                    step_name=$(echo "$step" | jq -r '.name')
+                    echo "Step: $step_name"
+                    actions=$(echo "$step" | jq '.actions')
+                    actions_count=$(echo "$actions" | jq 'length')
+                    for j in $(seq 0 $((actions_count - 1))); do
+                        action=$(echo "$actions" | jq ".[$j]")
+                        output_url=$(echo "$action" | jq -r '.output_url')
+                        if [ "$output_url" != "null" ] && [ -n "$output_url" ]; then
+                            echo "Fetching logs for action $((j+1)) in step '$step_name'..."
+                            log_output=$(curl -s "$output_url")
+                            echo "Logs for action $((j+1)) in step '$step_name':"
+                            echo "$log_output"
+                        else
+                            echo "No output URL for action $((j+1)) in step '$step_name'."
+                        fi
+                    done
+                done
+            fi
+            echo "---- End of logs for job build number $job_number ----"
+            done
+        done
+
+        # --------------------------------------
+        # 6. Set the Workflow Exit Code Based on Job Statuses
+        # --------------------------------------
+        if [ "$pipeline_failed" -eq 1 ]; then
+            echo "One or more jobs failed in the CircleCI pipeline."
+            exit 1
+        fi
+        echo "CircleCI pipeline completed successfully."
