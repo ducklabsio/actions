@@ -96,8 +96,12 @@ runs:
         # --------------------------------------
         pipeline_failed=0
         json="{}"
+        art_file="${{ github.workspace }}/artifacts.json"
+        echo $json > ${art_file}
+
         workflow_ids=$(echo "$workflows_response" | jq -r '.items[].id')
         for wf in $workflow_ids; do
+            art_json=$(cat ${art_file} | jq -r '.')
             echo "Processing workflow: $wf"
             wf_url="https://circleci.com/api/v2/workflow/${wf}"
             wf_response=$(curl -s -H "Circle-Token: ${circle_token}" "$wf_url")
@@ -121,50 +125,51 @@ runs:
                 echo "Fetching artifacts for job build number ${job_number}..."
                 artifacts_response=$(curl -s -H "Circle-Token: ${circle_token}" "${artifacts_url}")
                 echo "Artifacts for job build number ${job_number}:"
-                echo "$artifacts_response" | jq -c '.items[]' | while read art; do
+                job_artifacts=$(echo "$artifacts_response" | jq -c '.items[]')
+                while read art; do
                     art_path=$(echo "$art" | jq -r '.path')
                     art_url=$(echo "$art" | jq -r '.url')
+                    # echo "${art_path}: ${art_url}"
                     json=$(jq --arg k "${art_path}" --arg v "${art_url}" '. + {$k: $v}' <<< "$json")
-                done
+                done <<< "$job_artifacts"
+                temp=$(jq -n --argjson a "$json" --argjson b "$art_json" '$a + $b')
+                echo "${temp}" > ${art_file}
 
                 # Use CircleCI v1.1 API to get detailed job info (including steps)
-                job_details_url="https://circleci.com/api/v1.1/project/github/${cci_org}/${repo}/${job_number}?circle-token=${circle_token}"
-                echo "Fetching job details from v1.1 API for build number ${job_number}..."
-                job_details=$(curl -s "$job_details_url")
-                echo "${job_details}" | jq -r '.' 
-                steps=$(echo "$job_details" | jq '.steps')
-                if [ "$steps" = "null" ]; then
-                    echo "No steps found for job build number ${job_number}."
-                else
-                    step_count=$(echo "$steps" | jq 'length')
-                    echo "Found ${step_count} step(s) for job build number ${job_number}."
-                    for i in $(seq 0 $((step_count - 1))); do
-                        step=$(echo "$steps" | jq ".[$i]")
-                        step_name=$(echo "$step" | jq -r '.name')
-                        echo "Step: $step_name"
-                        actions=$(echo "$step" | jq '.actions')
-                        actions_count=$(echo "$actions" | jq 'length')
-                        for j in $(seq 0 $((actions_count - 1))); do
-                            action=$(echo "$actions" | jq ".[$j]")
-                            output_url=$(echo "$action" | jq -r '.output_url')
-                            if [ "$output_url" != "null" ] && [ -n "$output_url" ]; then
-                                echo "Fetching logs for action $((j+1)) in step '$step_name'..."
-                                log_output=$(curl -s "$output_url")
-                                echo "Logs for action $((j+1)) in step '$step_name':"
-                                echo "$log_output"
-                            else
-                                echo "No output URL for action $((j+1)) in step '$step_name'."
-                            fi
-                        done
-                    done
+                # job_details_url="https://circleci.com/api/v1.1/project/github/${cci_org}/${repo}/${job_number}?circle-token=${circle_token}"
+                # echo "Fetching job details from v1.1 API for build number ${job_number}..."
+                # job_details=$(curl -s "$job_details_url")
+                # echo "${job_details}" | jq -r '.' 
+                # steps=$(echo "$job_details" | jq '.steps')
+                # if [ "$steps" = "null" ]; then
+                #     echo "No steps found for job build number ${job_number}."
+                # else
+                #     step_count=$(echo "$steps" | jq 'length')
+                #     echo "Found ${step_count} step(s) for job build number ${job_number}."
+                #     for i in $(seq 0 $((step_count - 1))); do
+                #         step=$(echo "$steps" | jq ".[$i]")
+                #         step_name=$(echo "$step" | jq -r '.name')
+                #         echo "Step: $step_name"
+                #         actions=$(echo "$step" | jq '.actions')
+                #         actions_count=$(echo "$actions" | jq 'length')
+                #         for j in $(seq 0 $((actions_count - 1))); do
+                #             action=$(echo "$actions" | jq ".[$j]")
+                #             output_url=$(echo "$action" | jq -r '.output_url')
+                #             if [ "$output_url" != "null" ] && [ -n "$output_url" ]; then
+                #                 echo "Fetching logs for action $((j+1)) in step '$step_name'..."
+                #                 log_output=$(curl -s "$output_url")
+                #                 echo "Logs for action $((j+1)) in step '$step_name':"
+                #                 echo "$log_output"
+                #             else
+                #                 echo "No output URL for action $((j+1)) in step '$step_name'."
+                #             fi
+                #         done
+                #     done
                     
-                fi
+                # fi
                 echo "---- End of logs for job build number $job_number ----"
             done
         done
-        
-        # Save artifacts to a file for later retrieval
-        echo "${json}" > ${{ github.workspace }}/artifacts.json
 
         # --------------------------------------
         # 6. Set the Workflow Exit Code Based on Job Statuses
