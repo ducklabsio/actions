@@ -48,8 +48,9 @@ runs:
             echo "Response: $http_body"
             exit 1
         fi
-        pipeline_id=$(echo "$http_body" | jq -r '.id')
-
+        pipeline_id=$(echo "$http_body" | jq -r '.id') 
+        pipeline_number=$(echo "$http_body" | jq -r '.number')
+        
         echo "Pipeline triggered successfully. Pipeline ID: $pipeline_id"
 
         # ----------------------------------------------
@@ -74,6 +75,11 @@ runs:
             exit 1
             fi
         done
+        workflow_id=$(curl -s "https://circleci.com/api/v2/pipeline/$pipeline_id/workflow?circle-token=CIRCLECI_TOKEN" | jq -r '.items[].id')
+        pipeline_url="https://app.circleci.com/pipelines/github/${cci_org}/${repo}/$pipeline_number/workflows/$workflow_id"
+        echo "==============================================================================================================="
+        echo "CircleCI pipeline URL: $pipeline_url"
+        echo "==============================================================================================================="
 
         # --------------------------------------
         # 4. Poll for Pipeline Workflows to Complete
