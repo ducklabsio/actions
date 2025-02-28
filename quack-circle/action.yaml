@@ -95,6 +95,7 @@ runs:
         # 5. For Each Job, Fetch Job Details (v1.1) and Logs
         # --------------------------------------
         pipeline_failed=0
+        json="{}"
         workflow_ids=$(echo "$workflows_response" | jq -r '.items[].id')
         for wf in $workflow_ids; do
             echo "Processing workflow: $wf"
