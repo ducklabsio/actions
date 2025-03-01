@@ -9,6 +9,10 @@ inputs:
   circleci-token:
     description: 'CircleCI API token (store as a secret in GitHub)'
     required: true
+  get-logs:
+    description: 'Whether to fetch job logs from CircleCI (default: true)'
+    required: false
+    default: true
 runs:
   using: "composite"
   steps:
@@ -75,7 +79,7 @@ runs:
             exit 1
             fi
         done
-        
+
         workflow_id=$(curl -s -H "Circle-Token: ${circle_token}" "${workflows_url}" | jq -r '.items[].id')
         pipeline_url="https://app.circleci.com/pipelines/github/${cci_org}/${repo}/$pipeline_number/workflows/$workflow_id"
         echo "==============================================================================================================="
@@ -142,38 +146,40 @@ runs:
                 temp=$(jq -n --argjson a "$json" --argjson b "$art_json" '$a + $b')
                 echo "${temp}" > ${art_file}
 
-                # Use CircleCI v1.1 API to get detailed job info (including steps)
-                # job_details_url="https://circleci.com/api/v1.1/project/github/${cci_org}/${repo}/${job_number}?circle-token=${circle_token}"
-                # echo "Fetching job details from v1.1 API for build number ${job_number}..."
-                # job_details=$(curl -s "$job_details_url")
-                # echo "${job_details}" | jq -r '.' 
-                # steps=$(echo "$job_details" | jq '.steps')
-                # if [ "$steps" = "null" ]; then
-                #     echo "No steps found for job build number ${job_number}."
-                # else
-                #     step_count=$(echo "$steps" | jq 'length')
-                #     echo "Found ${step_count} step(s) for job build number ${job_number}."
-                #     for i in $(seq 0 $((step_count - 1))); do
-                #         step=$(echo "$steps" | jq ".[$i]")
-                #         step_name=$(echo "$step" | jq -r '.name')
-                #         echo "Step: $step_name"
-                #         actions=$(echo "$step" | jq '.actions')
-                #         actions_count=$(echo "$actions" | jq 'length')
-                #         for j in $(seq 0 $((actions_count - 1))); do
-                #             action=$(echo "$actions" | jq ".[$j]")
-                #             output_url=$(echo "$action" | jq -r '.output_url')
-                #             if [ "$output_url" != "null" ] && [ -n "$output_url" ]; then
-                #                 echo "Fetching logs for action $((j+1)) in step '$step_name'..."
-                #                 log_output=$(curl -s "$output_url")
-                #                 echo "Logs for action $((j+1)) in step '$step_name':"
-                #                 echo "$log_output"
-                #             else
-                #                 echo "No output URL for action $((j+1)) in step '$step_name'."
-                #             fi
-                #         done
-                #     done
-                    
-                # fi
+                if [ "${{ inputs.get-logs }}" = "true" ]; then
+                    Use CircleCI v1.1 API to get detailed job info (including steps)
+                    job_details_url="https://circleci.com/api/v1.1/project/github/${cci_org}/${repo}/${job_number}?circle-token=${circle_token}"
+                    echo "Fetching job details from v1.1 API for build number ${job_number}..."
+                    job_details=$(curl -s "$job_details_url")
+                    echo "${job_details}" | jq -r '.' 
+                    steps=$(echo "$job_details" | jq '.steps')
+                    if [ "$steps" = "null" ]; then
+                        echo "No steps found for job build number ${job_number}."
+                    else
+                        step_count=$(echo "$steps" | jq 'length')
+                        echo "Found ${step_count} step(s) for job build number ${job_number}."
+                        for i in $(seq 0 $((step_count - 1))); do
+                            step=$(echo "$steps" | jq ".[$i]")
+                            step_name=$(echo "$step" | jq -r '.name')
+                            echo "Step: $step_name"
+                            actions=$(echo "$step" | jq '.actions')
+                            actions_count=$(echo "$actions" | jq 'length')
+                            for j in $(seq 0 $((actions_count - 1))); do
+                                action=$(echo "$actions" | jq ".[$j]")
+                                output_url=$(echo "$action" | jq -r '.output_url')
+                                if [ "$output_url" != "null" ] && [ -n "$output_url" ]; then
+                                    echo "Fetching logs for action $((j+1)) in step '$step_name'..."
+                                    log_output=$(curl -s "$output_url")
+                                    echo "Logs for action $((j+1)) in step '$step_name':"
+                                    echo "$log_output"
+                                else
+                                    echo "No output URL for action $((j+1)) in step '$step_name'."
+                                fi
+                            done
+                        done
+                        
+                    fi
+                fi
                 echo "---- End of logs for job build number $job_number ----"
             done
         done
